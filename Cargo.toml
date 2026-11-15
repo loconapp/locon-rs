@@ -1,0 +1,19 @@
+[package]
+name = "realnative-locon"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Locon localization for RealNative: Locon locale files, phrase-as-key lookup, CLDR plurals and the asset validator, in Rust."
+repository = "https://github.com/loconapp/realnative-locon"
+publish = false
+
+[lib]
+name = "realnative_locon"
+
+[dependencies]
+icu_plurals = "2.4"
+icu_locale_core = "2.4"
+fixed_decimal = "0.7.3"
+include_dir = "0.7.4"
+serde = "1"
+serde_json = "1"
