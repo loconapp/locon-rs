@@ -1,22 +1,30 @@
-//! Locon localization for RealNative apps, with the semantics of Locon for JavaScript
-//! (<https://locon.dev>):
+//! [Locon](https://locon.dev) localization for Rust.
 //!
-//! - one flat JSON object per locale (`locales/<locale>.json`), string → string;
-//! - lookup by key **or by phrase**: an input that is not a key is looked up by its value in the
-//!   project (source) locale;
+//! - One flat JSON object per locale (`locales/de.json`: `{"greet": "Guten Morgen"}`): the same files
+//!   as Locon for JavaScript, so web, mobile and Rust code can share them.
+//! - Lookup **by key or by phrase**: an input that is not a key is looked up by its value in the
+//!   project (source) locale, so code can read `l("Guten Morgen")`.
 //! - `{token}` placeholders; CLDR plural forms as `_zero/_one/_two/_few/_many/_other` key suffixes,
-//!   chosen with ICU4X plural rules, `{count}` filled automatically;
-//! - per-key fallback: current locale → project locale.
+//!   chosen with ICU4X plural rules; `{count}` filled automatically.
+//! - Per-key fallback to the project locale; device language matching (`de-AT` → `de`,
+//!   `zh-TW` → `zh-Hant`); right-to-left detection.
+//! - [`check`]: the Locon asset audit (missing and unknown keys, placeholders, plural `_other`,
+//!   unreachable duplicates, stray scripts, unresolved phrases), for CI.
 //!
-//! App logic calls [`setup!`] once (embeds the locale files and exports the string table to the
-//! generated UI) and formats view-model text with [`t!`]. `realnative generate` resolves UI phrases
-//! to keys with [`Locon::resolve_static`] and checks the files with [`check`].
+//! ```
+//! let locon = locon::Locon::from_sources("de", &[
+//!     ("de", r#"{"cards_one": "{count} Karte", "cards_other": "{count} Karten"}"#),
+//!     ("en", r#"{"cards_one": "{count} card", "cards_other": "{count} cards"}"#),
+//! ]).unwrap();
+//! locon.set_locale(Some("en"));
+//! assert_eq!(locon.l("{count} Karten", &[], Some(3.0), None), "3 cards");
+//! ```
+//!
+//! For app-wide use, [`install`] one `Locon` and format with [`t!`].
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{OnceLock, RwLock};
-
-pub use include_dir;
 
 mod check;
 mod locale;
@@ -77,10 +85,30 @@ pub fn parse_locale(json: &str) -> Result<BTreeMap<String, String>, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Reads every `<locale>.json` in a directory (the CLI).
-pub fn load_dir(dir: &std::path::Path) -> Result<Assets, String> {
+/// A locale file that cannot be read or is not a flat object of strings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadError {
+    /// The file (or locale) it is about.
+    pub file: String,
+    pub message: String,
+}
+
+impl std::fmt::Display for LoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.file, self.message)
+    }
+}
+
+impl std::error::Error for LoadError {}
+
+/// Reads every `<locale>.json` in a directory.
+pub fn load_dir(dir: impl AsRef<std::path::Path>) -> Result<Assets, LoadError> {
+    let dir = dir.as_ref();
     let mut out = Assets::new();
-    let rd = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let rd = std::fs::read_dir(dir).map_err(|e| LoadError {
+        file: dir.display().to_string(),
+        message: e.to_string(),
+    })?;
     let mut paths: Vec<_> = rd.flatten().map(|e| e.path()).collect();
     paths.sort();
     for p in paths
@@ -88,32 +116,30 @@ pub fn load_dir(dir: &std::path::Path) -> Result<Assets, String> {
         .filter(|p| p.extension().is_some_and(|x| x == "json"))
     {
         let locale = p.file_stem().unwrap().to_string_lossy().to_string();
-        let text = std::fs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+        let file = p.display().to_string();
+        let text = std::fs::read_to_string(&p).map_err(|e| LoadError {
+            file: file.clone(),
+            message: e.to_string(),
+        })?;
         out.insert(
-            locale.clone(),
-            parse_locale(&text).map_err(|e| format!("locales/{locale}.json: {e}"))?,
+            locale,
+            parse_locale(&text).map_err(|message| LoadError { file, message })?,
         );
     }
     Ok(out)
 }
 
-/// Locale files embedded with `include_dir!` (app logic, see [`setup!`]).
-pub fn load_embedded(dir: &include_dir::Dir) -> Assets {
+/// Locale files given as `(locale, json)` pairs, e.g. compiled in with `include_str!`.
+pub fn load_sources(sources: &[(&str, &str)]) -> Result<Assets, LoadError> {
     let mut out = Assets::new();
-    for f in dir.files() {
-        let p = f.path();
-        if p.extension().is_none_or(|x| x != "json") {
-            continue;
-        }
-        let locale = p.file_stem().unwrap().to_string_lossy().to_string();
-        // `realnative check` rejects malformed files before a build; skip them defensively.
-        if let Some(text) = f.contents_utf8()
-            && let Ok(map) = parse_locale(text)
-        {
-            out.insert(locale, map);
-        }
+    for (locale, json) in sources {
+        let map = parse_locale(json).map_err(|message| LoadError {
+            file: format!("{locale}.json"),
+            message,
+        })?;
+        out.insert(locale.to_string(), map);
     }
-    out
+    Ok(out)
 }
 
 /// CLDR plural category of `count` in `locale` (`"one"`, `"few"`, `"other"`, ...).
@@ -193,7 +219,29 @@ pub struct Locon {
 }
 
 impl Locon {
-    /// `project` is the source language (`app.source_language`, Locon `projectLocale`).
+    /// Loads `<dir>/<locale>.json`; `project` is the source language (Locon `projectLocale`).
+    ///
+    /// ```no_run
+    /// let locon = locon::Locon::from_dir("locales", "en")?;
+    /// # Ok::<(), locon::LoadError>(())
+    /// ```
+    pub fn from_dir(dir: impl AsRef<std::path::Path>, project: &str) -> Result<Self, LoadError> {
+        Ok(Self::new(load_dir(dir)?, project))
+    }
+
+    /// Locale files compiled into the binary:
+    ///
+    /// ```ignore
+    /// let locon = locon::Locon::from_sources("en", &[
+    ///     ("en", include_str!("../locales/en.json")),
+    ///     ("de", include_str!("../locales/de.json")),
+    /// ])?;
+    /// ```
+    pub fn from_sources(project: &str, sources: &[(&str, &str)]) -> Result<Self, LoadError> {
+        Ok(Self::new(load_sources(sources)?, project))
+    }
+
+    /// `project` is the source language (Locon `projectLocale`).
     pub fn new(assets: Assets, project: &str) -> Self {
         let mut reverse = HashMap::new();
         for (loc, map) in &assets {
@@ -248,7 +296,7 @@ impl Locon {
         self.set_locale(l.as_deref());
     }
 
-    /// Changes with every locale change: the UI reloads its table and view models when it moves.
+    /// Changes with every locale change: callers that cache strings reload when it moves.
     pub fn revision(&self) -> u64 {
         self.revision.load(Ordering::SeqCst)
     }
@@ -279,8 +327,8 @@ impl Locon {
             .unwrap_or_else(|| input.to_string())
     }
 
-    /// Generate time: the key a static UI string resolves to (an exact key or a project-locale
-    /// phrase), or `None` when it resolves to nothing.
+    /// The key a static string resolves to (an exact key or a project-locale phrase), or `None`
+    /// when it resolves to nothing. Build tools use it to turn phrases into keys ahead of time.
     pub fn resolve_static(&self, input: &str) -> Option<String> {
         let src = self.assets.get(&self.project)?;
         if src.contains_key(input) {
@@ -330,8 +378,8 @@ impl Locon {
         interpolate(input, &params)
     }
 
-    /// Every key of the project locale with its value in `locale` (per-key fallback): the table the
-    /// generated UI reads static strings from.
+    /// Every key of the project locale with its value in `locale` (per-key fallback), e.g. to hand
+    /// a whole string table to a UI layer.
     pub fn table(&self, locale: &str) -> HashMap<String, String> {
         let Some(src) = self.assets.get(&self.project) else {
             return HashMap::new();
@@ -358,7 +406,7 @@ fn format_count(c: f64) -> String {
 
 static GLOBAL: OnceLock<Locon> = OnceLock::new();
 
-/// Makes `locon` the app's localization (first call wins). Done by [`setup!`].
+/// Makes `locon` the app-wide localization used by [`t()`] and [`t!`] (first call wins).
 pub fn install(locon: Locon) -> &'static Locon {
     let _ = GLOBAL.set(locon);
     GLOBAL.get().unwrap()
@@ -369,8 +417,8 @@ pub fn global() -> Option<&'static Locon> {
     GLOBAL.get()
 }
 
-/// Formats app-logic text through the installed localization. Without one (unit tests of app logic
-/// before the UI started) the phrase is interpolated as it is, like Locon's last resort.
+/// Formats text through the installed localization ([`install`]). Without one the phrase is
+/// interpolated as it is, like Locon's last resort (handy in unit tests).
 pub fn t(phrase: &str, params: &[(&str, String)], count: Option<f64>) -> String {
     match global() {
         Some(l) => l.l(phrase, params, count, None),
@@ -384,20 +432,19 @@ pub fn t(phrase: &str, params: &[(&str, String)], count: Option<f64>) -> String 
     }
 }
 
-/// Changes the app's language from app logic (a settings screen); `None` follows the device.
-/// The UI reloads its strings and every visible screen its view model.
+/// Changes the language of the installed localization; `None` selects the project locale.
 pub fn set_locale(locale: Option<&str>) {
     if let Some(l) = global() {
         l.set_locale(locale);
     }
 }
 
-/// The current locale of the app (the project locale before the UI started).
+/// The current locale of the installed localization.
 pub fn locale() -> Option<String> {
     global().map(Locon::locale)
 }
 
-/// Localized text in app logic: `t!("Good morning")`, `t!("{count} cards", count = n)`,
+/// Localized text through the installed localization: `t!("Good morning")`, `t!("{count} cards", count = n)`,
 /// `t!("Hello {name}", name = user.name)`. `count` (written first) selects the plural form and fills
 /// `{count}`; other values are anything with `Display`.
 #[macro_export]
@@ -426,93 +473,6 @@ count_impl!(i8, i16, i32, i64, isize, u8, u16, u32, u64, usize, f32, f64);
 #[doc(hidden)]
 pub fn __count<C: Count>(c: &C) -> f64 {
     c.as_count()
-}
-
-/// The table handed to the generated UI in one FFI call.
-#[doc(hidden)]
-pub struct Table {
-    pub locale: String,
-    pub rtl: bool,
-    pub revision: u64,
-    pub strings: HashMap<String, String>,
-}
-
-#[doc(hidden)]
-pub fn __table(
-    dir: &'static include_dir::Dir<'static>,
-    project: &str,
-    preferred: Option<Vec<String>>,
-) -> Table {
-    let l = match global() {
-        Some(l) => l,
-        None => install(Locon::new(load_embedded(dir), project)),
-    };
-    if let Some(p) = preferred {
-        // The device languages count only until app logic chose one.
-        if l.revision() == 0 {
-            l.use_device_locales(&p);
-        }
-    }
-    let locale = l.locale();
-    Table {
-        rtl: is_rtl(&locale),
-        revision: l.revision(),
-        strings: l.table(&locale),
-        locale,
-    }
-}
-
-/// Wires the app's localization (once, in app logic): embeds `locales/*.json` from the app root and
-/// exports the functions the generated UI calls. `source` is `app.source_language`.
-///
-/// ```ignore
-/// locon::setup!(source = "en");
-/// ```
-#[macro_export]
-macro_rules! setup {
-    (source = $source:literal) => {
-        static __RN_LOCON_DIR: $crate::include_dir::Dir<'static> =
-            $crate::include_dir::include_dir!("$CARGO_MANIFEST_DIR/../locales");
-
-        /// Strings of the current locale for the generated UI (one FFI call).
-        #[derive(uniffi::Record)]
-        pub struct RnLoconTable {
-            pub locale: String,
-            pub rtl: bool,
-            pub revision: u64,
-            pub strings: std::collections::HashMap<String, String>,
-        }
-
-        impl From<$crate::Table> for RnLoconTable {
-            fn from(t: $crate::Table) -> Self {
-                Self {
-                    locale: t.locale,
-                    rtl: t.rtl,
-                    revision: t.revision,
-                    strings: t.strings,
-                }
-            }
-        }
-
-        /// At startup: picks the locale from the device's preferred languages (unless app logic chose
-        /// one) and returns its strings.
-        #[uniffi::export]
-        pub fn rn_locon_start(preferred: Vec<String>) -> RnLoconTable {
-            $crate::__table(&__RN_LOCON_DIR, $source, Some(preferred)).into()
-        }
-
-        /// The current strings (after the revision changed).
-        #[uniffi::export]
-        pub fn rn_locon_table() -> RnLoconTable {
-            $crate::__table(&__RN_LOCON_DIR, $source, None).into()
-        }
-
-        /// Changes when app logic switched the language.
-        #[uniffi::export]
-        pub fn rn_locon_revision() -> u64 {
-            $crate::global().map_or(0, |l| l.revision())
-        }
-    };
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-//! The Locon asset audit (`check-locon-assets` of the locon-sync skill), for `realnative check`.
+//! The Locon asset audit (`check-locon-assets` of the locon-sync skill), for CI and build tools.
 
 use crate::{Assets, is_plural_key, plural_base};
 use std::collections::{BTreeMap, BTreeSet};

@@ -2,11 +2,16 @@
 name = "locon"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
 license = "MIT OR Apache-2.0"
-description = "Locon localization in Rust: flat locale files, lookup by key or phrase, CLDR plurals, the asset audit, and RealNative integration."
+description = "Locon localization: flat JSON locale files, lookup by key or by phrase, CLDR plurals, and an asset audit for CI."
 repository = "https://github.com/loconapp/locon-rs"
 homepage = "https://locon.dev"
-publish = false
+documentation = "https://docs.rs/locon"
+readme = "README.md"
+keywords = ["i18n", "localization", "l10n", "plural", "translation"]
+categories = ["internationalization", "localization"]
+include = ["src/**", "README.md", "LICENSE-MIT", "LICENSE-APACHE", "Cargo.toml"]
 
 [lib]
 name = "locon"
@@ -15,6 +20,5 @@ name = "locon"
 icu_plurals = "2.4"
 icu_locale_core = "2.4"
 fixed_decimal = "0.7.3"
-include_dir = "0.7.4"
 serde = "1"
 serde_json = "1"
