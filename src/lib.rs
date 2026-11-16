@@ -466,7 +466,7 @@ pub fn __table(
 /// exports the functions the generated UI calls. `source` is `app.source_language`.
 ///
 /// ```ignore
-/// realnative_locon::setup!(source = "en");
+/// locon::setup!(source = "en");
 /// ```
 #[macro_export]
 macro_rules! setup {

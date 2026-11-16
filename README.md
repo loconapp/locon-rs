@@ -1,4 +1,4 @@
-# realnative-locon
+# locon (Rust)
 
 [Locon](https://locon.dev) localization for [RealNative](https://github.com/vladbars/realnative) apps,
 in Rust. Same locale files and semantics as Locon for JavaScript, so React Native apps that use Locon
@@ -13,15 +13,15 @@ keep their `locales/*.json` unchanged.
 
 ## In a RealNative app
 
-`app-logic/Cargo.toml`: `realnative-locon` and `include_dir = "0.7.4"`, then once in `app-logic`:
+`app-logic/Cargo.toml`: `locon` and `include_dir = "0.7.4"`, then once in `app-logic`:
 
 ```rust
-realnative_locon::setup!(source = "en");
-use realnative_locon::t;
+locon::setup!(source = "en");
+use locon::t;
 
 let label = t!("{count} cards", count = n);     // plural form of the current locale
 let hello = t!("Hello {name}", name = user.name);
-realnative_locon::set_locale(Some("de"));        // switches the whole app at once
+locon::set_locale(Some("de"));        // switches the whole app at once
 ```
 
 UI code uses `tr!("Good morning")` (a phrase or a key); `realnative generate` resolves it to its key
