@@ -136,7 +136,10 @@ pub fn check(assets: &Assets, source: &str, used: &[(String, String)]) -> Vec<Is
     }
     // A duplicate value is fine while its second key is used by key; otherwise nothing reaches it.
     for (v, first, second) in shadowed {
-        if !used_keys.contains(&second) && !used.iter().any(|(p, _)| p == &second) {
+        // Forms of one plural family may share a text (Russian `few` and `other`): the phrase reaches
+        // the family, and the count picks the form.
+        let same_family = is_plural_key(&first) && is_plural_key(&second) && plural_base(&first) == plural_base(&second);
+        if !same_family && !used_keys.contains(&second) && !used.iter().any(|(p, _)| p == &second) {
             out.push(Issue { file: file(source), message: format!("\"{v}\" is both {first} and {second}: only {first} is reachable by the phrase, and {second} is not used by key") });
         }
     }
@@ -275,5 +278,14 @@ mod tests {
         );
         assert!(!has("n_one"), "{msgs:#?}"); // `{count}` may be spelled out in a plural form
         assert!(has("Cyrillic characters in z"), "{msgs:#?}");
+    }
+
+    #[test]
+    fn plural_forms_may_share_a_text() {
+        let mut a = Assets::new();
+        a.insert("ru".into(), parse_locale(r#"{"cards_one":"{count} карточка","cards_few":"{count} карточки","cards_many":"{count} карточек","cards_other":"{count} карточки"}"#).unwrap());
+        let used = vec![("{count} карточек".to_string(), "app-logic/src/lib.rs".to_string())];
+        let msgs: Vec<String> = check(&a, "ru", &used).into_iter().map(|i| i.message).collect();
+        assert!(msgs.is_empty(), "{msgs:#?}");
     }
 }
