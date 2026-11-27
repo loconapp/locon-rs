@@ -1,5 +1,10 @@
 # locon
 
+[![crates.io](https://img.shields.io/crates/v/locon.svg)](https://crates.io/crates/locon)
+[![docs.rs](https://img.shields.io/docsrs/locon)](https://docs.rs/locon)
+[![license](https://img.shields.io/crates/l/locon.svg)](#license)
+[![MSRV](https://img.shields.io/crates/msrv/locon.svg)](https://crates.io/crates/locon)
+
 [Locon](https://locon.dev) localization for Rust: flat JSON locale files, lookup **by key or by
 phrase**, CLDR plurals, and an asset audit for CI. The files and the lookup rules are the same as in
 Locon for JavaScript, so a web or React Native app and Rust code can share one set of translations.
